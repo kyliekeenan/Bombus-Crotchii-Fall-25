@@ -138,7 +138,9 @@ tmp <- tempfile(fileext = ".csv")
 drive_download(file, path = tmp, overwrite = TRUE)
 
 # 7) Read the CSV into a tibble.
-data <- readr::read_csv(tmp)
+# Read tab-delimited GBIF file
+data <- readr::read_tsv(tmp, show_col_types = FALSE)
+
 
 # 8) Inspect the first few rows to confirm it worked.
 head(data)
