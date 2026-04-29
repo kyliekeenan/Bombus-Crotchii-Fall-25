@@ -1,0 +1,144 @@
+---
+title: "Host_analysis"
+format: html
+editor: visual
+---
+
+## What this document does
+
+This Quarto document shows you how to: 1) authorize Google Drive access from R, 2) navigate to a specific folder and subfolder in your Drive, 3) download a CSV file to a temporary location, and 4) read it into R as a tibble.
+
+You can **copy this entire file** into a new `.qmd` document in your RStudio project (File → New File → Quarto Document → Paste) and then click **Render**.
+
+------------------------------------------------------------------------
+
+## Before you start
+
+-   Make sure you can sign into the correct Google account in your web browser.
+-   The first time you run this, you’ll be asked to grant permission for the `googledrive` package to access your Drive.
+-   This example assumes you have a top-level folder named `github_data/bees_climate_data` and that inside it is a subfolder named `processed` containing `california_bioclim.csv`.
+
+If your Drive layout or filenames differ, update the folder and file names below accordingly.
+
+------------------------------------------------------------------------
+
+## (Optional) Install packages
+
+If you don’t already have these packages, run the following once. This chunk is set to not execute by default to avoid re-installing.
+
+```{r install, eval=FALSE}
+# Install required packages (only once)
+install.packages(c("googledrive", "readr", "dplyr"))
+```
+
+------------------------------------------------------------------------
+
+## Load packages and set up Google authorization
+
+This chunk loads libraries and configures OAuth so your token is cached in a hidden `.secrets` folder inside your project.\
+If you share this project, **do not** commit the `.secrets` folder to a public repo.
+
+```{r setup, include=FALSE}
+# Load packages used in this document
+library(googledrive)  # Google Drive access (list, download, etc.)
+library(readr)       # Fast CSV reading into tibbles
+library(dplyr)       # Data manipulation helpers (e.g., filter)
+
+# Configure OAuth settings so your token is stored locally in ".secrets".
+# Use YOUR email here (or set to NA to be prompted). This helps disambiguate accounts.
+options(
+  gargle_oauth_cache = ".secrets",
+  gargle_oauth_email = NA_character_  # <- set to your account email or leave NA to choose interactively
+)
+
+# Start the OAuth flow (opens a browser window the first time). Token is cached in ".secrets".
+drive_auth(cache = ".secrets")
+```
+
+Between-code note: \> If you get an authentication prompt in your browser, choose the Google account that owns the Drive folder you want to access. After you authorize once, the cached token should be reused automatically on this machine.
+
+------------------------------------------------------------------------
+
+## Locate the folder, choose the file, and download it
+
+The code below: 1) gets the top-level folder `github_data/bees_climate_data`, 2) finds its `processed` subfolder, 3) lists files there, filters to `california_bioclim.csv`, 4) downloads the CSV to a temporary file, creates a dataframe called "data" 5) reads the data, creates a and 6) shows the first few rows.
+
+```{r import, echo=TRUE}
+# 1) Identify the top-level folder by name.
+# If there are multiple folders with the same name, `drive_get()` may return more than one row.
+# In that case, prefer using the specific folder's URL ID with drive_get(as_id("...")).
+#folder <- drive_get("Crotchii Project Fall 25/data")
+
+
+folder <- drive_get(as_id("https://drive.google.com/drive/u/1/folders/1ouBVzJbHekdkEfQDr1G1n6MAZtW-Kx6y"))
+# Now list or descend:
+drive_ls(folder)
+data_dir <- drive_ls(folder, type = "folder") %>% filter(name == "data")
+
+
+# 2) We'll look for a subfolder named "processed" INSIDE that folder.
+# drive_ls(folder) lists the immediate contents; we filter to the item named "processed".
+subfolder <- drive_ls(folder) %>% 
+  dplyr::filter(name == "raw")
+
+# Sanity check: ensure we found exactly one "raw" folder.
+if (nrow(subfolder) != 1) {
+  stop("Could not uniquely identify a 'raw' subfolder. Check that it exists and is uniquely named.")
+}
+
+# 3) List all files inside the "processed" subfolder to see what's available.
+files <- drive_ls(subfolder)
+
+# 4) Choose the specific CSV filename you want to download.
+# Update this if your file is named differently.
+selected_file <- "Bcrotchii_oct25_gbif.csv"
+
+# Filter to the selected file in that listing.
+file <- files %>% dplyr::filter(name == selected_file)
+
+# Another sanity check: require exactly one match.
+if (nrow(file) != 1) {
+  stop(paste0(
+    "Expected exactly one file named '", selected_file,
+    "' in the 'processed' subfolder, but found ", nrow(file), 
+    ". Check the filename and try again."
+  ))
+}
+
+# 5) Create a temporary file path ending in .csv so we don't clutter your project folder.
+tmp <- tempfile(fileext = ".csv")
+
+# 6) Download the Drive file to the temporary path.
+# overwrite = TRUE allows re-running this cell without manual cleanup.
+drive_download(file, path = tmp, overwrite = TRUE)
+
+# 7) Read the CSV into a tibble.
+# Read tab-delimited GBIF file
+data <- readr::read_tsv(tmp, show_col_types = FALSE)
+
+
+# 8) Inspect the first few rows to confirm it worked.
+head(data)
+```
+
+Between-code notes:
+
+\> If you see an error that the folder or file wasn’t found, double-check the names and capitalization. If multiple matches are found, consider using the Drive URL: `drive_get(as_id("your-drive-id-here"))`.
+
+\>You can give the new dataframe a different name than data.
+
+------------------------------------------------------------------------
+
+## Tips for adapting this to your own Drive
+
+-   **Different folder structure?** Replace `"github_data/bees_climate_data"` with the exact name (or Drive ID) of your folder.\
+-   **Different subfolder name?** Replace `"processed"` in the filter with your subfolder’s name.\
+-   **Different filename?** Change `selected_file` to the file you need, and keep the `.csv` extension if it’s a CSV.\
+-   **Multiple Google accounts?** Set `options(gargle_oauth_email = "your.name@school.edu")` to force the correct account.\
+-   **Team Drives / Shared Drives?** `googledrive` works with them; make sure your account has access and that you’re pointing to the right location.
+
+------------------------------------------------------------------------
+
+## Clean up (optional)
+
+If you want to remove the cached OAuth token and force a fresh sign-in next time, delete the `.secrets` folder in your project directory.
