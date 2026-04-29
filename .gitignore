@@ -2,4 +2,8 @@
 .Rhistory
 .RData
 .Ruserdata
+<<<<<<< HEAD
 .positai
+=======
+.secrets
+>>>>>>> 7ab0bb1ce027d373dcfaef5d899f5cb4f59a9707
