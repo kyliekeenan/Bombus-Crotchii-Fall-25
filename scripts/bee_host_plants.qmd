@@ -1,0 +1,266 @@
+---
+title: "Crotch's Bumble Bee Host Plant Analysis"
+author: "OpenAI"
+format:
+  html:
+    toc: true
+    code-fold: false
+execute:
+  echo: true
+  warning: true
+  message: true
+editor: visual
+---
+
+## Overview
+
+This Quarto document reproduces the interactive R console workflow as a script. It:
+
+- reads the bee observation data from `../data/`
+- converts the table to an `sf` object using longitude and latitude
+- downloads California county boundaries with `tigris`
+- extracts Santa Barbara County observations
+- summarizes host plant observations
+- writes figures and tables to `../output/`
+
+## Project layout
+
+Expected project structure:
+
+```text
+project/
+├── data/
+│   └── Crotchii_xerces_1_dec_2025.xlsx
+├── output/
+└── scripts/
+    └── bee_host_plants.qmd
+```
+
+## Packages
+
+```{r}
+#| label: setup
+#| include: true
+
+required_packages <- c(
+  "sf",
+  "dplyr",
+  "ggplot2",
+  "tigris",
+  "readxl",
+  "stringr",
+  "readr"
+)
+
+missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(tigris)
+library(readxl)
+library(stringr)
+library(readr)
+
+options(tigris_use_cache = TRUE)
+```
+
+If you need to reinstall macOS binary packages manually, these were downloaded during your console session:
+
+```text
+/var/folders/pn/d57bb9jj719fxgk9pqfgqtlw0000gn/T//RtmpJ5lLOB/downloaded_packages
+```
+
+That temporary folder is not reliable long-term, so this script installs from CRAN when needed.
+
+## Paths
+
+```{r}
+#| label: paths
+
+script_dir <- getwd()
+data_dir <- normalizePath(file.path(script_dir, "..", "data"), mustWork = FALSE)
+output_dir <- normalizePath(file.path(script_dir, "..", "output"), mustWork = FALSE)
+
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+xlsx_path <- file.path(data_dir, "Crotchii_xerces_1_dec_2025.xlsx")
+csv_path  <- file.path(data_dir, "Crotchii_xerces_1_dec_2025.csv")
+```
+
+## Import data
+
+This section tries an Excel file first, then a CSV file.
+
+```{r}
+#| label: import-data
+
+if (file.exists(xlsx_path)) {
+  bee_data <- read_excel(xlsx_path, sheet = 1)
+} else if (file.exists(csv_path)) {
+  bee_data <- read_csv(csv_path, show_col_types = FALSE)
+} else {
+  stop(
+    "No input data file found. Place either 'Crotchii_xerces_1_dec_2025.xlsx' or ",
+    "'Crotchii_xerces_1_dec_2025.csv' in ../data/."
+  )
+}
+
+bee_data <- as.data.frame(bee_data)
+
+glimpse(bee_data)
+```
+
+## Convert to spatial data
+
+```{r}
+#| label: make-sf
+
+required_columns <- c("decimalLongitude", "decimalLatitude", "Plant_species")
+missing_columns <- setdiff(required_columns, names(bee_data))
+
+if (length(missing_columns) > 0) {
+  stop("Missing required columns: ", paste(missing_columns, collapse = ", "))
+}
+
+bee_sf <- bee_data %>%
+  filter(!is.na(decimalLongitude), !is.na(decimalLatitude)) %>%
+  st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
+
+bee_sf_clean <- bee_sf %>%
+  filter(!is.na(Plant_species), Plant_species != "")
+
+print(class(bee_sf_clean))
+print(st_geometry_type(bee_sf_clean))
+```
+
+## County boundaries
+
+```{r}
+#| label: california-counties
+
+ca_counties <- counties(state = "CA", cb = TRUE, class = "sf") %>%
+  st_transform(st_crs(bee_sf_clean))
+
+santa_barbara <- ca_counties %>%
+  filter(NAME == "Santa Barbara") %>%
+  st_transform(st_crs(bee_sf_clean))
+```
+
+## Santa Barbara County observations
+
+```{r}
+#| label: santa-barbara-join
+
+sb_bees <- st_join(bee_sf_clean, santa_barbara, join = st_within, left = FALSE)
+
+sb_plant_counts <- sb_bees %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Plant_species), Plant_species != "") %>%
+  count(Plant_species, sort = TRUE)
+
+top_sb_plants <- sb_plant_counts %>%
+  slice_head(n = 10)
+
+top_sb_plants
+```
+
+```{r}
+#| label: save-santa-barbara-table
+
+write_csv(top_sb_plants, file.path(output_dir, "top_santa_barbara_plants.csv"))
+```
+
+```{r}
+#| label: santa-barbara-plot
+
+p_sb <- ggplot(top_sb_plants, aes(x = reorder(Plant_species, n), y = n)) +
+  geom_col(fill = "darkolivegreen3") +
+  coord_flip() +
+  labs(
+    title = "Host Plant Preferences in Santa Barbara County",
+    x = "Plant Species",
+    y = "Number of Observations"
+  ) +
+  theme_minimal()
+
+p_sb
+
+ggsave(
+  filename = file.path(output_dir, "host_plant_preferences_santa_barbara.png"),
+  plot = p_sb,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+```
+
+## Statewide map of host plant observations
+
+```{r}
+#| label: statewide-map
+
+p_ca <- ggplot() +
+  geom_sf(data = ca_counties, fill = "gray95", color = "gray50", linewidth = 0.2) +
+  geom_sf(data = bee_sf_clean, aes(color = Plant_species), size = 2, alpha = 0.8) +
+  labs(
+    title = "Host Plant Observations in California",
+    color = "Plant Species"
+  ) +
+  theme_minimal()
+
+p_ca
+
+ggsave(
+  filename = file.path(output_dir, "host_plant_observations_california.png"),
+  plot = p_ca,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+```
+
+## Statewide map for the top 10 host plants
+
+```{r}
+#| label: top-plants-statewide
+
+top_plants <- bee_sf_clean %>%
+  st_drop_geometry() %>%
+  count(Plant_species, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(Plant_species)
+
+bee_top <- bee_sf_clean %>%
+  filter(Plant_species %in% top_plants)
+
+p_top <- ggplot() +
+  geom_sf(data = ca_counties, fill = "gray95", color = "gray50", linewidth = 0.2) +
+  geom_sf(data = bee_top, aes(color = Plant_species), size = 2, alpha = 0.8) +
+  labs(
+    title = "Top Host Plant Observations in California",
+    color = "Plant Species"
+  ) +
+  theme_minimal()
+
+p_top
+
+ggsave(
+  filename = file.path(output_dir, "top_host_plant_observations_california.png"),
+  plot = p_top,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+```
+
+## Session notes
+
+- The original CRS mismatch error happened because `bee_sf` and `santa_barbara` were not in the same coordinate reference system.
+- This script fixes that by transforming county geometries to `st_crs(bee_sf_clean)` before the spatial join.
+- The earlier `st_as_sf()` error happened because `sf` had not yet been loaded.
+
