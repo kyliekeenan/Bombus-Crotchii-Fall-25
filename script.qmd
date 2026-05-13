@@ -14,9 +14,9 @@ You can **copy this entire file** into a new `.qmd` document in your RStudio pro
 
 ## Before you start
 
--   Make sure you can sign into the correct Google account in your web browser.
--   The first time you run this, you’ll be asked to grant permission for the `googledrive` package to access your Drive.
--   This example assumes you have a top-level folder named `github_data/bees_climate_data` and that inside it is a subfolder named `processed` containing `california_bioclim.csv`.
+- Make sure you can sign into the correct Google account in your web browser.
+- The first time you run this, you’ll be asked to grant permission for the `googledrive` package to access your Drive.
+- This example assumes you have a top-level folder named `github_data/bees_climate_data` and that inside it is a subfolder named `processed` containing `california_bioclim.csv`.
 
 If your Drive layout or filenames differ, update the folder and file names below accordingly.
 
@@ -131,11 +131,11 @@ Between-code notes:
 
 ## Tips for adapting this to your own Drive
 
--   **Different folder structure?** Replace `"github_data/bees_climate_data"` with the exact name (or Drive ID) of your folder.\
--   **Different subfolder name?** Replace `"processed"` in the filter with your subfolder’s name.\
--   **Different filename?** Change `selected_file` to the file you need, and keep the `.csv` extension if it’s a CSV.\
--   **Multiple Google accounts?** Set `options(gargle_oauth_email = "your.name@school.edu")` to force the correct account.\
--   **Team Drives / Shared Drives?** `googledrive` works with them; make sure your account has access and that you’re pointing to the right location.
+- **Different folder structure?** Replace `"github_data/bees_climate_data"` with the exact name (or Drive ID) of your folder.\
+- **Different subfolder name?** Replace `"processed"` in the filter with your subfolder’s name.\
+- **Different filename?** Change `selected_file` to the file you need, and keep the `.csv` extension if it’s a CSV.\
+- **Multiple Google accounts?** Set `options(gargle_oauth_email = "your.name@school.edu")` to force the correct account.\
+- **Team Drives / Shared Drives?** `googledrive` works with them; make sure your account has access and that you’re pointing to the right location.
 
 ------------------------------------------------------------------------
 
