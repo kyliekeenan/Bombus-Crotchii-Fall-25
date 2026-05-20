@@ -3,3 +3,8 @@
 .RData
 .Ruserdata
 .positai
+
+# Large GBIF Darwin Core Archive files; keep local, do not commit
+scripts/gbif_bombus_california_dwca/occurrence.txt
+scripts/gbif_bombus_california_dwca/verbatim.txt
+scripts/gbif_bombus_california_dwca/*.zip
