@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<eml:eml xmlns:eml="https://eml.ecoinformatics.org/eml-2.2.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://eml.ecoinformatics.org/eml-2.2.0 https://rs.gbif.org/schema/eml-gbif-profile/1.3/eml.xsd"
+packageId="84ab7b76-f762-11e1-a439-00145eb45e9a"  system="http://gbif.org" scope="system"
+xml:lang="en">
+    <dataset>
+        <alternateIdentifier>10.15468/efb17f</alternateIdentifier>
+        <alternateIdentifier>https://ipt.asc.ohio-state.edu/resource?r=osuc_ipt</alternateIdentifier>
+        <alternateIdentifier>https://asc-ipt.asc.ohio-state.edu/mbd/resource?r=osuc_ipt</alternateIdentifier>
+        <alternateIdentifier>http://xbiod.osu.edu/ipt/resource.do?r=osuc</alternateIdentifier>
+        <alternateIdentifier>http://hymfiles.biosci.ohio-state.edu:8080/ipt/resource.do?r=osuc</alternateIdentifier>
+        <alternateIdentifier>84ab7b76-f762-11e1-a439-00145eb45e9a</alternateIdentifier>
+        <alternateIdentifier>625</alternateIdentifier>
+        <title>Triplehorn Insect Collection, The Ohio State University</title>
+        <creator>
+            <individualName>
+                <givenName>Norman</givenName>
+                <surName>Johnson</surName>
+            </individualName>
+            <organizationName>The Ohio State University</organizationName>
+            <positionName>Professor and Director</positionName>
+            <address>
+                <deliveryPoint>1315 Kinnear Road</deliveryPoint>
+                <city>Columbus</city>
+                <administrativeArea>Ohio</administrativeArea>
+                <postalCode>43212</postalCode>
+                <country>UNITED_STATES</country>
+            </address>
+            <electronicMailAddress>johnson.2@osu.edu</electronicMailAddress>
+            <userId directory="https://orcid.org/">0000-0003-1691-5187</userId>
+        </creator>
+        <metadataProvider>
+            <individualName>
+                <givenName>Norman</givenName>
+                <surName>Johnson</surName>
+            </individualName>
+            <organizationName>The Ohio State University</organizationName>
+            <positionName>Professor and Director</positionName>
+            <address>
+                <deliveryPoint>1315 Kinnear Road</deliveryPoint>
+                <city>Columbus</city>
+                <administrativeArea>Ohio</administrativeArea>
+                <postalCode>43212</postalCode>
+                <country>UNITED_STATES</country>
+            </address>
+            <electronicMailAddress>johnson.2@osu.edu</electronicMailAddress>
+            <userId directory="https://orcid.org/">0000-0003-1691-5187</userId>
+        </metadataProvider>
+        <associatedParty>
+            <individualName>
+                <givenName>Norm</givenName>
+                <surName>Johnson</surName>
+            </individualName>
+            <electronicMailAddress>johnson.2@osu.edu</electronicMailAddress>
+            <role>USER</role>
+        </associatedParty>
+        <pubDate>
+                2026-05-11
+        </pubDate>
+        <language>ENGLISH</language>
+        <abstract>
+            <para>Occurrence data from specimens housed in the Triplehorn Insect Collection at The Ohio State University. Data capture is an ongoing process. To date the greatest effort has focused on the orders Hymenoptera and Coleoptera. Specimens in the collection come from around the world, but the traditional geographical emphasis has been on the Midwestern and Southwestern United States.</para>
+        </abstract>
+        <keywordSet>
+            <keyword>Occurrence</keyword>
+            <keywordThesaurus>GBIF Dataset Type Vocabulary: http://rs.gbif.org/vocabulary/gbif/dataset_type_2015-07-10.xml</keywordThesaurus>
+        </keywordSet>
+        <keywordSet>
+            <keyword>Specimen</keyword>
+            <keywordThesaurus>GBIF Dataset Subtype Vocabulary: http://rs.gbif.org/vocabulary/gbif/dataset_subtype.xml</keywordThesaurus>
+        </keywordSet>
+        <intellectualRights>
+            <para>This work is licensed under a <ulink url="http://creativecommons.org/licenses/by/4.0/legalcode"><citetitle>Creative Commons Attribution (CC-BY) 4.0 License</citetitle></ulink>.</para>
+        </intellectualRights>
+        <licensed>
+            <licenseName>Creative Commons Attribution 4.0 International</licenseName>
+            <url>https://spdx.org/licenses/CC-BY-4.0.html</url>
+            <identifier>CC-BY-4.0</identifier>
+        </licensed>
+        <distribution scope="document">
+            <online>
+                <url function="information">https://mbd-db.osu.edu/</url>
+            </online>
+        </distribution>
+        <distribution scope="document">
+            <online>
+                <url function="download">https://ipt.asc.ohio-state.edu/archive.do?r=osuc_ipt</url>
+            </online>
+        </distribution>
+        <coverage>
+            <geographicCoverage>
+                <geographicDescription>Specimens come from around the world. Historically, the emphasis has been on insects from the Midwestern and Southwestern United States.</geographicDescription>
+                <boundingCoordinates>
+                    <westBoundingCoordinate>-179.97</westBoundingCoordinate>
+                    <eastBoundingCoordinate>179.983333</eastBoundingCoordinate>
+                    <northBoundingCoordinate>81.521944</northBoundingCoordinate>
+                    <southBoundingCoordinate>-53.793611</southBoundingCoordinate>
+                </boundingCoordinates>
+            </geographicCoverage>
+            <taxonomicCoverage>
+                <generalTaxonomicCoverage>The collection houses specimens of all orders of insects. The particular strengths are in the orders Coleoptera, Hemiptera, and Hymenoptera.</generalTaxonomicCoverage>
+                <taxonomicClassification>
+                    <taxonRankValue>Insecta</taxonRankValue>
+                </taxonomicClassification>
+            </taxonomicCoverage>
+        </coverage>
+        <maintenance>
+            <description>
+                <para></para>
+            </description>
+            <maintenanceUpdateFrequency>weekly</maintenanceUpdateFrequency>
+        </maintenance>
+        <contact>
+            <individualName>
+                <givenName>Norman</givenName>
+                <surName>Johnson</surName>
+            </individualName>
+            <organizationName>The Ohio State University</organizationName>
+            <positionName>Professor and Director</positionName>
+            <address>
+                <deliveryPoint>1315 Kinnear Road</deliveryPoint>
+                <city>Columbus</city>
+                <administrativeArea>Ohio</administrativeArea>
+                <postalCode>43212</postalCode>
+                <country>UNITED_STATES</country>
+            </address>
+            <electronicMailAddress>johnson.2@osu.edu</electronicMailAddress>
+            <userId directory="https://orcid.org/">0000-0003-1691-5187</userId>
+        </contact>
+
+    </dataset>
+
+    <additionalMetadata>
+        <metadata>
+            <gbif>
+                <dateStamp>2026-05-13T18:34:07Z</dateStamp>
+                <citation>Johnson N (2026). Triplehorn Insect Collection, The Ohio State University. Museum of Biological Diversity, The Ohio State University. Occurrence dataset https://doi.org/10.15468/efb17f accessed via GBIF.org on 2026-05-13.</citation>
+                <collection>
+                    
+                    <collectionIdentifier>OSUC</collectionIdentifier>
+                    <collectionName>Triplehorn Insect Collection</collectionName>
+                </collection>
+                <specimenPreservationMethod>DRIED</specimenPreservationMethod>
+                <jgtiCuratorialUnit>
+                    <jgtiUnitType>Specimen</jgtiUnitType>
+                    <jgtiUnits uncertaintyMeasure="50,000">4,000,000</jgtiUnits>
+                </jgtiCuratorialUnit>
+            </gbif>
+        </metadata>
+    </additionalMetadata>
+    </eml:eml>

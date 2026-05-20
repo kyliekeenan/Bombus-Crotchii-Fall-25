@@ -1,0 +1,124 @@
+---
+title: "Downloading Bee Records with Associated Host Plants from GBIF"
+author: ""
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Overview
+
+GBIF is primarily an occurrence database, not a curated bee--plant interaction database. Many useful bee--plant records are found in Darwin Core fields such as `associatedTaxa`, `associatedOrganisms`, `behavior`, and `occurrenceRemarks`.
+
+This document shows one practical workflow for downloading bee records from GBIF and extracting records that may contain host plant, floral visitor, pollen, nectar, or other plant-association information.
+
+## Setup
+
+```{r}
+# Install packages if needed
+# install.packages(c("rgbif", "dplyr", "stringr", "readr", "purrr"))
+
+library(rgbif)
+library(dplyr)
+library(stringr)
+library(readr)
+library(purrr)
+```
+
+## GBIF credentials
+
+GBIF occurrence downloads require a GBIF account. Store your credentials in your `.Renviron` file rather than typing them directly into scripts.
+
+```{r, eval=FALSE}
+# Run this once to edit your .Renviron file:
+# usethis::edit_r_environ()
+
+# Add lines like these, replacing with your own credentials:
+# GBIF_USER="lebuhn"
+# GBIF_PWD="gbif4glb"
+# GBIF_EMAIL="lebuhn@sfsu.edu"
+```
+
+Restart R after editing `.Renviron`.
+
+## Define bee families
+
+Here we use the major bee families. GBIF taxon keys are retrieved dynamically using the GBIF backbone taxonomy.
+
+```{r}
+library(rgbif)
+library(dplyr)
+library(stringr)
+library(readr)
+library(tidyr)
+
+# Look up the GBIF backbone key for the bumble bee genus Bombus
+bombus_key <- rgbif::name_backbone(
+  name = "Bombus",
+  rank = "GENUS",
+  kingdom = "Animalia"
+)$usageKey
+
+bombus_key
+```
+
+```{r}
+bombus_download <- occ_download(
+  pred_default(),
+  pred("genusKey", bombus_key),
+  pred("country", "US"),
+  pred("stateProvince", "California"),
+  format = "DWCA"
+)
+```
+
+```{r host-plant}
+
+read_tsv_chr <- function(path) {
+  if (!file.exists(path)) {
+    return(tibble())
+  }
+
+  readr::read_tsv(
+    path,
+    col_types = cols(.default = col_character()),
+    show_col_types = FALSE
+  )
+}
+
+occurrence <- read_tsv_chr(file.path(out_dir, "occurrence.txt"))
+verbatim   <- read_tsv_chr(file.path(out_dir, "verbatim.txt"))
+```
+
+```{r}
+# Keep only records identified as Bombus crotchii
+
+crotchii_occurrence <- occurrence %>%
+  filter(
+    species == "Bombus crotchii" |
+      str_detect(scientificName, regex("^Bombus crotchii\\b", ignore_case = TRUE))
+  )
+
+dir.create("data", showWarnings = FALSE, recursive = TRUE)
+
+crotchii_date <- format(Sys.Date(), "%Y-%m-%d")
+
+crotchii_outfile <- file.path(
+  "data",
+  paste0("gbif_crotchii_", crotchii_date, ".csv")
+)
+
+readr::write_csv(crotchii_occurrence, crotchii_outfile)
+
+crotchii_outfile
+nrow(crotchii_occurrence)
+getwd()
+```

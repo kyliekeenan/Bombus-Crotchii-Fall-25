@@ -1,181 +1,372 @@
 ---
-title: "Import Bee Data from Google Drive"
+title: "California Bombus Host-Plant Records from GBIF"
+author: "Gretchen"
 format: html
 execute:
+  echo: true
   warning: false
-  message: false
-editor: 
-  markdown: 
-    wrap: 72
+  message: true
+params:
+  gbif_download_key: ""
+  download_dir: "gbif_downloads"
+  out_dir: "gbif_bombus_california_dwca"
+  output_csv: "gbif_bombus_california_candidate_host_records.csv"
 ---
 
-## What this document does
+## Overview
 
-This Quarto document shows you how to: 1) authorize Google Drive access
-from R, 2) navigate to a specific folder and subfolder in your Drive, 3)
-download a CSV file to a temporary location, and 4) read it into R as a
-tibble.
+This script downloads California occurrence records for the bumble bee genus *Bombus* from GBIF and searches the resulting Darwin Core Archive for possible host-plant or floral-association information.
 
-You can **copy this entire file** into a new `.qmd` document in your
-RStudio project (File → New File → Quarto Document → Paste) and then
-click **Render**.
+Host-plant information is not available as a searchable GBIF download predicate, so it cannot be used to limit the occurrence download directly. Here, we first download California occurrence records for the genus *Bombus* as a Darwin Core Archive, then search the downloaded occurrence, verbatim, and extension files for fields that may contain host-plant or floral-association information.
 
-------------------------------------------------------------------------
+Because host-plant associations are often supplied as free text and are not standardized across all publishers, the extracted records should be treated as candidate host-plant associations requiring review before analysis.
 
-## Before you start
+## Setup
 
-- Make sure you can sign into the correct Google account in your web
-  browser.
-- The first time you run this, you’ll be asked to grant permission for
-  the `googledrive` package to access your Drive.
-- This example assumes you have a top-level folder named
-  `github_data/bees_climate_data` and that inside it is a subfolder
-  named `processed` containing `california_bioclim.csv`.
+```{r setup}
+# install.packages(c(
+#   "rgbif",
+#   "dplyr",
+#   "stringr",
+#   "readr",
+#   "tidyr",
+#   "purrr"
+# ))
 
-If your Drive layout or filenames differ, update the folder and file
-names below accordingly.
-
-------------------------------------------------------------------------
-
-## (Optional) Install packages
-
-If you don’t already have these packages, run the following once. This
-chunk is set to not execute by default to avoid re-installing.
-
-```{r install, eval=FALSE}
-# Install required packages (only once)
-install.packages(c("googledrive", "readr", "dplyr"))
+library(rgbif)
+library(dplyr)
+library(stringr)
+library(readr)
+library(tidyr)
+library(purrr)
 ```
 
-------------------------------------------------------------------------
+## GBIF credentials
 
-## Load packages and set up Google authorization
+GBIF downloads require a GBIF account. The cleanest approach is to store your credentials in `.Renviron` rather than writing them directly into this script.
 
-This chunk loads libraries and configures OAuth so your token is cached
-in a hidden `.secrets` folder inside your project.\
-If you share this project, **do not** commit the `.secrets` folder to a
-public repo.
+Your `.Renviron` file should contain lines like these, using your own GBIF account information:
 
-```{r setup, include=FALSE}
-# Load packages used in this document
-library(googledrive)  # Google Drive access (list, download, etc.)
-library(readr)       # Fast CSV reading into tibbles
-library(dplyr)       # Data manipulation helpers (e.g., filter)
+```{r credentials-example, eval=FALSE}
+GBIF_USER="your_gbif_username"
+GBIF_PWD="your_gbif_password"
+GBIF_EMAIL="your_email@example.edu"
+```
 
-# Configure OAuth settings so your token is stored locally in ".secrets".
-# Use YOUR email here (or set to NA to be prompted). This helps disambiguate accounts.
-options(
-  gargle_oauth_cache = ".secrets",
-  gargle_oauth_email = NA_character_  # <- set to your account email or leave NA to choose interactively
+
+## Look up the GBIF taxon key for *Bombus*
+
+```{r bombus-key}
+bombus_key <- rgbif::name_backbone(
+  name = "Bombus",
+  rank = "GENUS",
+  kingdom = "Animalia"
+)$usageKey
+
+bombus_key
+```
+
+## Download California *Bombus* occurrence records
+
+This download uses `pred_default()`, which keeps records that are present, have coordinates, and lack flagged geospatial issues. The additional predicates restrict the download to the genus *Bombus*, the United States, and California.
+
+If you already submitted a GBIF download and have its download key, enter it in the YAML parameter `gbif_download_key` at the top of this document. If `params$gbif_download_key` is blank, the script will submit a new GBIF download.
+
+```{r gbif-download}
+if (nzchar(params$gbif_download_key)) {
+  bombus_download_key <- params$gbif_download_key
+} else {
+  bombus_download <- occ_download(
+    pred_default(),
+    pred("genusKey", bombus_key),
+    pred("country", "US"),
+    pred("stateProvince", "California"),
+    format = "DWCA"
+  )
+
+  bombus_download <- occ_download_wait(bombus_download)
+  bombus_download_key <- bombus_download$key
+}
+
+bombus_download_key
+
+```
+
+## Retrieve and unzip the Darwin Core Archive
+
+```{r retrieve-download}
+dir.create(params$out_dir, showWarnings = FALSE, recursive = TRUE)
+
+zip_path <- file.path(
+  params$download_dir,
+  paste0(bombus_download_key, ".zip")
 )
 
-# Start the OAuth flow (opens a browser window the first time). Token is cached in ".secrets".
-drive_auth(cache = ".secrets")
+unzip(zip_path, exdir = params$out_dir)
+
+list.files(params$out_dir)
 ```
 
-Between-code note: \> If you get an authentication prompt in your
-browser, choose the Google account that owns the Drive folder you want
-to access. After you authorize once, the cached token should be reused
-automatically on this machine.
+## Helper functions
 
-------------------------------------------------------------------------
+```{r helper-functions}
+read_tsv_chr <- function(path) {
+  if (!file.exists(path)) {
+    return(tibble())
+  }
 
-## Locate the folder, choose the file, and download it
-
-The code below: 1) gets the top-level folder
-`github_data/bees_climate_data`, 2) finds its `processed` subfolder, 3)
-lists files there, filters to `california_bioclim.csv`, 4) downloads the
-CSV to a temporary file, creates a dataframe called "data" 5) reads the
-data, creates a and 6) shows the first few rows.
-
-```{r import, echo=TRUE}
-# 1) Identify the top-level folder by name.
-# If there are multiple folders with the same name, `drive_get()` may return more than one row.
-# In that case, prefer using the specific folder's URL ID with drive_get(as_id("...")).
-#folder <- drive_get("Crotchii Project Fall 25/data")
-
-
-folder <- drive_get(as_id("https://drive.google.com/drive/u/1/folders/1ouBVzJbHekdkEfQDr1G1n6MAZtW-Kx6y"))
-# Now list or descend:
-drive_ls(folder)
-data_dir <- drive_ls(folder, type = "folder") %>% filter(name == "data")
-
-
-# 2) We'll look for a subfolder named "processed" INSIDE that folder.
-# drive_ls(folder) lists the immediate contents; we filter to the item named "processed".
-subfolder <- drive_ls(folder) %>% 
-  dplyr::filter(name == "raw")
-
-# Sanity check: ensure we found exactly one "raw" folder.
-if (nrow(subfolder) != 1) {
-  stop("Could not uniquely identify a 'raw' subfolder. Check that it exists and is uniquely named.")
+  readr::read_tsv(
+    path,
+    col_types = cols(.default = col_character()),
+    show_col_types = FALSE
+  )
 }
 
-# 3) List all files inside the "processed" subfolder to see what's available.
-files <- drive_ls(subfolder)
+find_host_columns <- function(x) {
+  if (ncol(x) == 0) {
+    return(character())
+  }
 
-# 4) Choose the specific CSV filename you want to download.
-# Update this if your file is named differently.
-selected_file <- "Bcrotchii_oct25_gbif.csv"
-
-# Filter to the selected file in that listing.
-file <- files %>% dplyr::filter(name == selected_file)
-
-# Another sanity check: require exactly one match.
-if (nrow(file) != 1) {
-  stop(paste0(
-    "Expected exactly one file named '", selected_file,
-    "' in the 'processed' subfolder, but found ", nrow(file), 
-    ". Check the filename and try again."
-  ))
+  names(x)[
+    str_detect(
+      names(x),
+      regex(
+        paste(
+          c(
+            "associatedTaxa",
+            "associatedOrganisms",
+            "associatedOccurrences",
+            "host",
+            "plant",
+            "flower",
+            "floral",
+            "nectar",
+            "pollen",
+            "food",
+            "substrate",
+            "habitat",
+            "occurrenceRemarks",
+            "fieldNotes",
+            "dynamicProperties"
+          ),
+          collapse = "|"
+        ),
+        ignore_case = TRUE
+      )
+    )
+  ]
 }
 
-# 5) Create a temporary file path ending in .csv so we don't clutter your project folder.
-tmp <- tempfile(fileext = ".csv")
-
-# 6) Download the Drive file to the temporary path.
-# overwrite = TRUE allows re-running this cell without manual cleanup.
-drive_download(file, path = tmp, overwrite = TRUE)
-
-# 7) Read the CSV into a tibble.
-# Read tab-delimited GBIF file
-data <- readr::read_tsv(tmp, show_col_types = FALSE)
-
-
-# 8) Inspect the first few rows to confirm it worked.
-head(data)
+host_text_pattern <- regex(
+  paste(
+    c(
+      "host",
+      "plant",
+      "flower",
+      "floral",
+      "nectar",
+      "pollen",
+      "forag",
+      "visit",
+      "on ",
+      "collected on",
+      "reared from"
+    ),
+    collapse = "|"
+  ),
+  ignore_case = TRUE
+)
 ```
 
-Between-code notes:
+## Read occurrence and verbatim files
 
-\> If you see an error that the folder or file wasn’t found,
-double-check the names and capitalization. If multiple matches are
-found, consider using the Drive URL:
-`drive_get(as_id("your-drive-id-here"))`.
+```{r read-core-files}
+occurrence <- read_tsv_chr(file.path(params$out_dir, "occurrence.txt"))
+verbatim   <- read_tsv_chr(file.path(params$out_dir, "verbatim.txt"))
 
-\>You can give the new dataframe a different name than data.
+nrow(occurrence)
+nrow(verbatim)
+```
 
-------------------------------------------------------------------------
+## Inspect likely host-plant columns
 
-## Tips for adapting this to your own Drive
+```{r inspect-host-columns}
+find_host_columns(occurrence)
+find_host_columns(verbatim)
+```
 
-- **Different folder structure?** Replace
-  `"github_data/bees_climate_data"` with the exact name (or Drive ID) of
-  your folder.\
-- **Different subfolder name?** Replace `"processed"` in the filter with
-  your subfolder’s name.\
-- **Different filename?** Change `selected_file` to the file you need,
-  and keep the `.csv` extension if it’s a CSV.\
-- **Multiple Google accounts?** Set
-  `options(gargle_oauth_email = "your.name@school.edu")` to force the
-  correct account.\
-- **Team Drives / Shared Drives?** `googledrive` works with them; make
-  sure your account has access and that you’re pointing to the right
-  location.
+## Extract possible host-plant text from occurrence and verbatim files
 
-------------------------------------------------------------------------
+```{r extract-core-host-records}
+extract_host_text <- function(dat, source_file) {
+  if (nrow(dat) == 0) {
+    return(tibble())
+  }
 
-## Clean up (optional)
+  host_cols <- find_host_columns(dat)
 
-If you want to remove the cached OAuth token and force a fresh sign-in
-next time, delete the `.secrets` folder in your project directory.
+  if (length(host_cols) == 0) {
+    return(tibble())
+  }
+
+  id_cols <- intersect(
+    c(
+      "gbifID",
+      "occurrenceID",
+      "catalogNumber",
+      "recordNumber",
+      "datasetKey",
+      "scientificName",
+      "family",
+      "genus",
+      "specificEpithet",
+      "eventDate",
+      "decimalLatitude",
+      "decimalLongitude"
+    ),
+    names(dat)
+  )
+
+  dat %>%
+    select(any_of(c(id_cols, host_cols))) %>%
+    pivot_longer(
+      cols = any_of(host_cols),
+      names_to = "host_field",
+      values_to = "host_text"
+    ) %>%
+    mutate(source_file = source_file) %>%
+    filter(
+      !is.na(host_text),
+      host_text != "",
+      str_detect(host_text, host_text_pattern)
+    )
+}
+
+host_from_occurrence <- extract_host_text(occurrence, "occurrence.txt")
+host_from_verbatim   <- extract_host_text(verbatim, "verbatim.txt")
+```
+
+## Search extension files
+
+Darwin Core Archives may include extension files that contain additional information, such as measurements, facts, or relationships among organisms. These files are not guaranteed to be present, but when they are present they may contain host-plant information.
+
+```{r extension-files}
+all_txt <- list.files(params$out_dir, pattern = "\\.txt$", full.names = TRUE)
+
+extension_files <- all_txt[
+  !basename(all_txt) %in% c(
+    "occurrence.txt",
+    "verbatim.txt",
+    "citations.txt",
+    "rights.txt"
+  )
+]
+
+basename(extension_files)
+```
+
+```{r extract-extension-host-records}
+extract_from_extension <- function(path) {
+  dat <- read_tsv_chr(path)
+
+  if (nrow(dat) == 0) {
+    return(tibble())
+  }
+
+  possible_cols <- names(dat)[
+    str_detect(
+      names(dat),
+      regex(
+        paste(
+          c(
+            "measurementType",
+            "verbatimMeasurementType",
+            "measurementValue",
+            "measurementRemarks",
+            "relationship",
+            "resource",
+            "host",
+            "plant",
+            "flower",
+            "nectar",
+            "pollen",
+            "associated"
+          ),
+          collapse = "|"
+        ),
+        ignore_case = TRUE
+      )
+    )
+  ]
+
+  if (length(possible_cols) == 0) {
+    return(tibble())
+  }
+
+  id_cols <- intersect(
+    c(
+      "gbifID",
+      "id",
+      "coreid",
+      "coreId",
+      "occurrenceID",
+      "resourceID"
+    ),
+    names(dat)
+  )
+
+  dat %>%
+    select(any_of(c(id_cols, possible_cols))) %>%
+    pivot_longer(
+      cols = any_of(possible_cols),
+      names_to = "host_field",
+      values_to = "host_text"
+    ) %>%
+    mutate(source_file = basename(path)) %>%
+    filter(
+      !is.na(host_text),
+      host_text != "",
+      str_detect(host_text, host_text_pattern)
+    )
+}
+
+host_from_extensions <- purrr::map_dfr(extension_files, extract_from_extension)
+```
+
+## Combine candidate host-plant records
+
+```{r combine-host-records}
+host_records_all <- bind_rows(
+  host_from_occurrence,
+  host_from_verbatim,
+  host_from_extensions
+) %>%
+  distinct()
+
+host_records_all
+```
+
+## Summarize extracted records
+
+```{r summarize-host-records}
+host_records_all %>%
+  count(source_file, host_field, sort = TRUE)
+```
+
+## Save candidate host-plant records
+
+```{r save-results}
+readr::write_csv(host_records_all, params$output_csv)
+
+params$output_csv
+```
+
+## Notes for downstream cleaning
+
+The resulting CSV should be reviewed before analysis. In particular:
+
+- Some records may describe floral visitation rather than true larval host use.
+- Some plant names may be informal, misspelled, abbreviated, or embedded in longer notes.
+- Some records may mention habitat or substrate rather than an actual plant association.
+- Duplicate host information may appear in both interpreted and verbatim files.
+- Records lacking host-plant information are expected and are not errors.
