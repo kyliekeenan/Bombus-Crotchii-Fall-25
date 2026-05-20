@@ -1,124 +1,944 @@
 ---
-title: "Downloading Bee Records with Associated Host Plants from GBIF"
-author: ""
-date: today
-format:
-  html:
-    toc: true
-    toc-depth: 3
-    code-fold: false
-    theme: cosmo
+title: "California Bombus Host-Plant Records from GBIF"
+author: "Gretchen"
+format: html
 execute:
   echo: true
   warning: false
-  message: false
+  message: true
+params:
+  gbif_download_key: ""
+  refresh_checkpoints: false
 ---
 
 ## Overview
 
-GBIF is primarily an occurrence database, not a curated bee--plant interaction database. Many useful bee--plant records are found in Darwin Core fields such as `associatedTaxa`, `associatedOrganisms`, `behavior`, and `occurrenceRemarks`.
+This document downloads California occurrence records for the bumble bee genus *Bombus* from GBIF and searches the resulting Darwin Core Archive for possible host-plant or floral-association information.
 
-This document shows one practical workflow for downloading bee records from GBIF and extracting records that may contain host plant, floral visitor, pollen, nectar, or other plant-association information.
+Host-plant information is not available as a searchable GBIF download predicate, so it cannot be used to limit the occurrence download directly. Here, we first download California occurrence records for the genus *Bombus* as a Darwin Core Archive, then search the downloaded occurrence, verbatim, and extension files for fields that may contain host-plant or floral-association information.
+
+In a GBIF Darwin Core Archive, extension files are extra tables that hang off the main occurrence.txt table.
+
+A useful way to think about the archive is:
+
+File type Role Plain meaning occurrence.txt Main table One row per occurrence record, usually the bee specimen or observation verbatim.txt Original/source wording Less-interpreted text or fields from the publisher Extension files Related detail tables Extra information attached to occurrence records
+
+Extension files are used when a record has information that does not fit neatly into the main occurrence table, or when there may be multiple related details per occurrence.
+
+Because host-plant associations are often supplied as free text and are not standardized across all publishers, the extracted records should be treated as candidate host-plant associations requiring review before analysis.
+
+## Project folder structure
+
+This document is designed to live in the `scripts/` folder of a project with this structure:
+
+``` text
+project/
+  scripts/
+  data/
+    raw/
+    processed/
+    gbif_bombus_california_dwca/
+    gbif_downloads/
+  outputs/
+```
+
+The script finds the project root automatically by looking upward for the `scripts/`, `data/`, and `outputs/` folders. This avoids hard-coded paths and should allow the project to run on any computer with the same folder structure.
+
+GBIF zip files are stored in `data/gbif_downloads/`. If an older folder named `data/gbif download_files/` or `data/gibf download_files/` exists, the script checks those folders for existing zip files and copies them into `data/gbif_downloads/`.
+
+## Checkpoint workflow
+
+This workflow saves intermediate products as CSV files.
+
+Raw downloaded or parsed data are saved in:
+
+``` text
+data/raw/
+```
+
+Processed intermediate files are saved in:
+
+``` text
+data/processed/
+```
+
+Final outputs are saved in:
+
+``` text
+outputs/
+```
+
+By default, existing checkpoint files are reused. To rebuild them from scratch, change this YAML parameter to `true`:
+
+``` yaml
+refresh_checkpoints: true
+```
+
+## Inputs and Outputs
+
+| File | Role in workflow | What it is | Occurrence data? | Verbatim data? | Extension data? | Host-related filtering applied? | What changed from previous step? |
+|----|----|----|----|----|----|----|----|
+| `data/gbif_downloads/<gbif_download_key>.zip` | Input | Original GBIF Darwin Core Archive download | Yes | Maybe | Maybe | No | Original GBIF download; no R processing yet. |
+| `data/raw/00_bombus_taxon_key.csv` | Reference/tracking output | GBIF backbone taxon-key lookup for *Bombus* | No | No | No | No | Created before the download; identifies the GBIF taxon key used for the search. |
+| `data/raw/01_gbif_download_key.csv` | Reference/tracking output | GBIF download key record | No | No | No | No | Records which GBIF download was used or requested. |
+| `data/raw/02_occurrence_raw.csv` | Intermediate output | Parsed copy of `occurrence.txt` | Yes | No | No | No | `occurrence.txt` was extracted from the zip and saved as CSV. |
+| `data/raw/03_verbatim_raw.csv` | Intermediate output | Parsed copy of `verbatim.txt`, if present | No | Yes | No | No | `verbatim.txt` was extracted from the zip and saved as CSV; if absent, an empty placeholder table is created. |
+| `data/processed/04_host_column_inventory.csv` | Intermediate output | Inventory of likely host-related columns in occurrence and verbatim files | Yes | Yes | No | Column-name screen only | Column names were screened for possible host/floral relevance. Individual record text was not filtered. |
+| `data/processed/05_host_from_occurrence.csv` | Intermediate output | Candidate host records from `occurrence.txt` | Yes | No | No | Host-text filter | Likely host-related occurrence columns were searched for host/floral text terms. |
+| `data/processed/06_host_from_verbatim.csv` | Intermediate output | Candidate host records from `verbatim.txt` | No | Yes | No | Host-text filter | Likely host-related verbatim columns were searched for host/floral text terms. |
+| `data/processed/07_extension_file_inventory.csv` | Intermediate output | Inventory of extension files | No | No | Yes | No | The script identified extra `.txt` files in the archive, excluding `occurrence.txt`, `verbatim.txt`, `citations.txt`, and `rights.txt`. |
+| `data/processed/08_host_from_extensions.csv` | Intermediate output | Candidate host records from extension files | No | No | Yes | Host-text filter | Likely host-related extension columns were searched for host/floral text terms. |
+| `data/processed/09_candidate_host_records_all.csv` | Intermediate output | Combined candidate host records | Yes | Yes | Yes | Host-text filtered source | Candidate records from occurrence, verbatim, and extension files were combined, deduplicated, and sorted. |
+| `data/processed/10_candidate_host_record_summary.csv` | Intermediate output | Summary of candidate host records | Yes | Yes | Yes | Host-text filtered source | Combined candidate records were summarized by source file and host field. |
+| `outputs/gbif_bombus_california_candidate_host_records.csv` | Final output | Final exported candidate host-record CSV | Yes | Yes | Yes | Host-text filtered source | Export copy of `09_candidate_host_records_all.csv` for downstream review. |
 
 ## Setup
 
-```{r}
-# Install packages if needed
-# install.packages(c("rgbif", "dplyr", "stringr", "readr", "purrr"))
+This chunk loads packages, finds the project root, and defines all project-relative paths. No absolute paths are used.
 
-library(rgbif)
-library(dplyr)
-library(stringr)
-library(readr)
-library(purrr)
-```
+```{r setup}
+# install.packages(c(
+#   "rgbif",
+#   "dplyr",
+#   "stringr",
+#   "readr",
+#   "tidyr",
+#   "purrr",
+#   "tibble"
+# ))
 
-## GBIF credentials
-
-GBIF occurrence downloads require a GBIF account. Store your credentials in your `.Renviron` file rather than typing them directly into scripts.
-
-```{r, eval=FALSE}
-# Run this once to edit your .Renviron file:
-# usethis::edit_r_environ()
-
-# Add lines like these, replacing with your own credentials:
-# GBIF_USER="lebuhn"
-# GBIF_PWD="gbif4glb"
-# GBIF_EMAIL="lebuhn@sfsu.edu"
-```
-
-Restart R after editing `.Renviron`.
-
-## Define bee families
-
-Here we use the major bee families. GBIF taxon keys are retrieved dynamically using the GBIF backbone taxonomy.
-
-```{r}
 library(rgbif)
 library(dplyr)
 library(stringr)
 library(readr)
 library(tidyr)
+library(purrr)
+library(tibble)
 
-# Look up the GBIF backbone key for the bumble bee genus Bombus
-bombus_key <- rgbif::name_backbone(
-  name = "Bombus",
-  rank = "GENUS",
-  kingdom = "Animalia"
-)$usageKey
+has_text <- function(x) {
+  length(x) == 1 && !is.na(x) && nzchar(x)
+}
 
-bombus_key
-```
+find_project_root <- function() {
+  input_file <- tryCatch(knitr::current_input(), error = function(e) NULL)
 
-```{r}
-bombus_download <- occ_download(
-  pred_default(),
-  pred("genusKey", bombus_key),
-  pred("country", "US"),
-  pred("stateProvince", "California"),
-  format = "DWCA"
-)
-```
-
-```{r host-plant}
-
-read_tsv_chr <- function(path) {
-  if (!file.exists(path)) {
-    return(tibble())
+  if (has_text(input_file) && file.exists(input_file)) {
+    start_dir <- dirname(normalizePath(input_file, winslash = "/", mustWork = TRUE))
+  } else {
+    start_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
   }
 
-  readr::read_tsv(
+  current_dir <- start_dir
+
+  for (i in seq_len(10)) {
+    has_project_dirs <- all(dir.exists(file.path(
+      current_dir,
+      c("scripts", "data", "outputs")
+    )))
+
+    if (has_project_dirs) {
+      return(current_dir)
+    }
+
+    parent_dir <- dirname(current_dir)
+
+    if (identical(parent_dir, current_dir)) {
+      break
+    }
+
+    current_dir <- parent_dir
+  }
+
+  stop(
+    "Could not find project root. Expected to find scripts/, data/, and outputs/ ",
+    "in the project root or one of its parent directories."
+  )
+}
+
+project_root <- find_project_root()
+
+path_from_root <- function(...) {
+  file.path(project_root, ...)
+}
+
+scripts_dir <- path_from_root("scripts")
+data_dir <- path_from_root("data")
+raw_dir <- path_from_root("data", "raw")
+processed_dir <- path_from_root("data", "processed")
+dwca_dir <- path_from_root("data", "gbif_bombus_california_dwca")
+gbif_download_dir <- path_from_root("data", "gbif_downloads")
+outputs_dir <- path_from_root("outputs")
+
+# Compatibility with older or misspelled folder names.
+legacy_gbif_download_dirs <- c(
+  path_from_root("data", "gbif download_files"),
+  path_from_root("data", "gibf download_files")
+)
+
+walk(
+  c(raw_dir, processed_dir, dwca_dir, gbif_download_dir, outputs_dir),
+  dir.create,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+final_output_csv <- file.path(
+  outputs_dir,
+  "gbif_bombus_california_candidate_host_records.csv"
+)
+
+message("Project root: ", project_root)
+message("GBIF zip files will be stored in: ", gbif_download_dir)
+message("Final output will be written to: ", final_output_csv)
+```
+
+## GBIF credentials
+
+GBIF downloads require a GBIF account. Store credentials in `.Renviron` rather than writing them directly into this document.
+
+Your `.Renviron` file should contain lines like these, using your own GBIF account information:
+
+```{r credentials-example, eval=FALSE}
+GBIF_USER="your_gbif_username"
+GBIF_PWD="your_gbif_password"
+GBIF_EMAIL="your_email@example.edu"
+```
+
+After editing `.Renviron`, restart R so the credentials are available through `Sys.getenv()`.
+
+## Helper functions
+
+This chunk defines helper functions for reading, writing, and reusing checkpoint CSV files.
+
+```{r helper-functions}
+write_checkpoint <- function(dat, path) {
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  readr::write_csv(dat, path, na = "")
+  invisible(path)
+}
+
+read_checkpoint <- function(path) {
+  readr::read_csv(
     path,
-    col_types = cols(.default = col_character()),
+    col_types = readr::cols(.default = readr::col_character()),
     show_col_types = FALSE
   )
 }
 
-occurrence <- read_tsv_chr(file.path(out_dir, "occurrence.txt"))
-verbatim   <- read_tsv_chr(file.path(out_dir, "verbatim.txt"))
+cached_csv <- function(path, make_data, rebuild = params$refresh_checkpoints) {
+  if (file.exists(path) && !isTRUE(rebuild)) {
+    message("Reading checkpoint: ", path)
+    return(read_checkpoint(path))
+  }
+
+  message("Creating checkpoint: ", path)
+  dat <- make_data()
+
+  if (!inherits(dat, "data.frame")) {
+    dat <- tibble::as_tibble(dat)
+  }
+
+  write_checkpoint(dat, path)
+  dat
+}
+
+empty_file_tbl <- function() {
+  tibble(.empty_file = character())
+}
+
+read_tsv_chr <- function(path, required = FALSE) {
+  if (!file.exists(path)) {
+    if (isTRUE(required)) {
+      stop("Required file not found: ", path)
+    } else {
+      return(empty_file_tbl())
+    }
+  }
+
+  readr::read_tsv(
+    path,
+    col_types = readr::cols(.default = readr::col_character()),
+    show_col_types = FALSE
+  )
+}
+
+empty_host_tbl <- function() {
+  tibble(
+    source_file = character(),
+    source_row = character(),
+    host_field = character(),
+    host_text = character()
+  )
+}
 ```
 
-```{r}
-# Keep only records identified as Bombus crotchii
+## Checkpoint index
 
-crotchii_occurrence <- occurrence %>%
-  filter(
-    species == "Bombus crotchii" |
-      str_detect(scientificName, regex("^Bombus crotchii\\b", ignore_case = TRUE))
+This chunk writes a simple index of the checkpoint files created by the workflow.
+
+```{r checkpoint-index}
+checkpoint_index <- tibble(
+  checkpoint_file = c(
+    file.path("data", "raw", "00_bombus_taxon_key.csv"),
+    file.path("data", "raw", "01_gbif_download_key.csv"),
+    file.path("data", "raw", "02_occurrence_raw.csv"),
+    file.path("data", "raw", "03_verbatim_raw.csv"),
+    file.path("data", "processed", "04_host_column_inventory.csv"),
+    file.path("data", "processed", "05_host_from_occurrence.csv"),
+    file.path("data", "processed", "06_host_from_verbatim.csv"),
+    file.path("data", "processed", "07_extension_file_inventory.csv"),
+    file.path("data", "processed", "08_host_from_extensions.csv"),
+    file.path("data", "processed", "09_candidate_host_records_all.csv"),
+    file.path("data", "processed", "10_candidate_host_record_summary.csv"),
+    file.path("outputs", "gbif_bombus_california_candidate_host_records.csv")
+  ),
+  purpose = c(
+    "GBIF backbone taxon key for Bombus.",
+    "GBIF download key used to retrieve the Darwin Core Archive.",
+    "Raw occurrence.txt table saved as CSV.",
+    "Raw verbatim.txt table saved as CSV, when present.",
+    "Inventory of occurrence and verbatim columns that may contain host-plant information.",
+    "Candidate host-plant records extracted from occurrence.txt.",
+    "Candidate host-plant records extracted from verbatim.txt.",
+    "Inventory of Darwin Core Archive extension files.",
+    "Candidate host-plant records extracted from extension files.",
+    "Combined candidate host-plant records from all sources.",
+    "Summary counts by source file and host-text field.",
+    "Final candidate host-record CSV for downstream review."
   )
-
-dir.create("data", showWarnings = FALSE, recursive = TRUE)
-
-crotchii_date <- format(Sys.Date(), "%Y-%m-%d")
-
-crotchii_outfile <- file.path(
-  "data",
-  paste0("gbif_crotchii_", crotchii_date, ".csv")
 )
 
-readr::write_csv(crotchii_occurrence, crotchii_outfile)
+write_checkpoint(
+  checkpoint_index,
+  file.path(processed_dir, "00_checkpoint_index.csv")
+)
 
-crotchii_outfile
-nrow(crotchii_occurrence)
-getwd()
+checkpoint_index
 ```
+
+## Look up the GBIF taxon key for *Bombus*
+
+GBIF downloads use numeric taxon keys. This chunk looks up the GBIF backbone key for the genus *Bombus* and saves it in `data/raw/`.
+
+```{r bombus-key}
+bombus_key_tbl <- cached_csv(
+  file.path(raw_dir, "00_bombus_taxon_key.csv"),
+  function() {
+    bombus_backbone <- rgbif::name_backbone(
+      name = "Bombus",
+      rank = "GENUS",
+      kingdom = "Animalia"
+    )
+
+    if (is.null(bombus_backbone$usageKey) || is.na(bombus_backbone$usageKey)) {
+      stop("No GBIF backbone usageKey found for Bombus.")
+    }
+
+    tibble(
+      scientific_name = "Bombus",
+      rank = "GENUS",
+      kingdom = "Animalia",
+      usageKey = as.character(bombus_backbone$usageKey),
+      lookup_date = as.character(Sys.Date())
+    )
+  }
+)
+
+bombus_key <- as.integer(bombus_key_tbl$usageKey[[1]])
+
+bombus_key_tbl
+```
+
+## Submit or reuse the GBIF download
+
+This chunk either reuses an existing GBIF download key or submits a new GBIF download request.
+
+The order of preference is:
+
+1.  Use `params$gbif_download_key` if it is supplied in the YAML.
+2.  Otherwise, reuse `data/raw/01_gbif_download_key.csv` if it already exists.
+3.  Otherwise, submit a new GBIF download request.
+
+```{r gbif-download}
+download_key_checkpoint <- file.path(raw_dir, "01_gbif_download_key.csv")
+
+gbif_param_key <- params$gbif_download_key
+
+if (is.null(gbif_param_key) || is.na(gbif_param_key)) {
+  gbif_param_key <- ""
+}
+
+if (has_text(gbif_param_key)) {
+
+  download_key_tbl <- tibble(
+    download_key = gbif_param_key,
+    source = "YAML parameter",
+    created_or_reused_at = as.character(Sys.time())
+  )
+
+  write_checkpoint(download_key_tbl, download_key_checkpoint)
+
+} else if (file.exists(download_key_checkpoint) && !isTRUE(params$refresh_checkpoints)) {
+
+  download_key_tbl <- read_checkpoint(download_key_checkpoint)
+
+} else {
+
+  gbif_user <- Sys.getenv("GBIF_USER")
+  gbif_pwd <- Sys.getenv("GBIF_PWD")
+  gbif_email <- Sys.getenv("GBIF_EMAIL")
+
+  missing_gbif_env <- c(
+    GBIF_USER = gbif_user,
+    GBIF_PWD = gbif_pwd,
+    GBIF_EMAIL = gbif_email
+  )
+
+  missing_gbif_env <- names(missing_gbif_env)[!nzchar(missing_gbif_env)]
+
+  if (length(missing_gbif_env) > 0) {
+    stop(
+      "Missing GBIF credentials in .Renviron: ",
+      paste(missing_gbif_env, collapse = ", ")
+    )
+  }
+
+  bombus_download <- rgbif::occ_download(
+    rgbif::pred_default(),
+    rgbif::pred("genusKey", bombus_key),
+    rgbif::pred("country", "US"),
+    rgbif::pred("stateProvince", "California"),
+    format = "DWCA",
+    user = gbif_user,
+    pwd = gbif_pwd,
+    email = gbif_email
+  )
+
+  bombus_download <- rgbif::occ_download_wait(bombus_download)
+
+  download_key_tbl <- tibble(
+    download_key = bombus_download$key,
+    source = "new GBIF download request",
+    created_or_reused_at = as.character(Sys.time())
+  )
+
+  write_checkpoint(download_key_tbl, download_key_checkpoint)
+}
+
+bombus_download_key <- download_key_tbl$download_key[[1]]
+
+download_key_tbl
+```
+
+## Retrieve and unzip the Darwin Core Archive
+
+This chunk downloads the GBIF zip file into `data/gbif_downloads/`, then unzips it into `data/gbif_bombus_california_dwca/`.
+
+If an older GBIF download folder exists, the script checks for the needed zip file there and copies it into the canonical folder.
+
+```{r retrieve-download}
+raw_core_checkpoints_exist <- all(file.exists(c(
+  file.path(raw_dir, "02_occurrence_raw.csv"),
+  file.path(raw_dir, "03_verbatim_raw.csv")
+)))
+
+extension_checkpoints_exist <- all(file.exists(c(
+  file.path(processed_dir, "07_extension_file_inventory.csv"),
+  file.path(processed_dir, "08_host_from_extensions.csv")
+)))
+
+dwca_needed <- isTRUE(params$refresh_checkpoints) ||
+  !raw_core_checkpoints_exist ||
+  !extension_checkpoints_exist
+
+zip_filename <- paste0(bombus_download_key, ".zip")
+zip_path <- file.path(gbif_download_dir, zip_filename)
+
+legacy_zip_paths <- file.path(legacy_gbif_download_dirs, zip_filename)
+legacy_zip_paths <- legacy_zip_paths[file.exists(legacy_zip_paths)]
+
+if (!file.exists(zip_path) && length(legacy_zip_paths) > 0) {
+  message("Copying existing GBIF zip from older folder: ", legacy_zip_paths[[1]])
+  file.copy(
+    from = legacy_zip_paths[[1]],
+    to = zip_path,
+    overwrite = TRUE
+  )
+}
+
+if (dwca_needed) {
+
+  if (!file.exists(zip_path) || isTRUE(params$refresh_checkpoints)) {
+    rgbif::occ_download_get(
+      key = bombus_download_key,
+      path = gbif_download_dir,
+      overwrite = isTRUE(params$refresh_checkpoints)
+    )
+  }
+
+  if (!file.exists(zip_path)) {
+    stop("Expected GBIF zip file was not found: ", zip_path)
+  }
+
+  if (dir.exists(dwca_dir) && isTRUE(params$refresh_checkpoints)) {
+    unlink(
+      list.files(dwca_dir, full.names = TRUE),
+      recursive = TRUE,
+      force = TRUE
+    )
+  }
+
+  dir.create(dwca_dir, showWarnings = FALSE, recursive = TRUE)
+
+  unzip(
+    zipfile = zip_path,
+    exdir = dwca_dir,
+    overwrite = TRUE
+  )
+
+} else {
+  message("Raw and extension checkpoints already exist; skipping GBIF zip retrieval.")
+}
+
+dwca_files <- if (dir.exists(dwca_dir)) {
+  list.files(dwca_dir)
+} else {
+  character()
+}
+
+tibble(dwca_file = dwca_files)
+```
+
+## Define host-plant search helpers
+
+This chunk defines the column and text-search logic used to find possible host-plant or floral-association information.
+
+```{r host-search-helpers}
+find_host_columns <- function(x) {
+  if (ncol(x) == 0) {
+    return(character())
+  }
+
+  names(x)[
+    stringr::str_detect(
+      names(x),
+      stringr::regex(
+        paste(
+          c(
+            "associatedTaxa",
+            "associatedOrganisms",
+            "associatedOccurrences",
+            "host",
+            "plant",
+            "flower",
+            "floral",
+            "nectar",
+            "pollen",
+            "food",
+            "substrate",
+            "habitat",
+            "occurrenceRemarks",
+            "fieldNotes",
+            "dynamicProperties"
+          ),
+          collapse = "|"
+        ),
+        ignore_case = TRUE
+      )
+    )
+  ]
+}
+
+host_text_pattern <- stringr::regex(
+  paste(
+    c(
+      "\\bhost\\b",
+      "\\bplant\\b",
+      "\\bflower\\b",
+      "\\bfloral\\b",
+      "\\bnectar\\b",
+      "\\bpollen\\b",
+      "forag",
+      "\\bvisit",
+      "\\bon\\b",
+      "collected on",
+      "reared from"
+    ),
+    collapse = "|"
+  ),
+  ignore_case = TRUE
+)
+
+make_host_column_inventory <- function(dat, source_file) {
+  host_cols <- find_host_columns(dat)
+
+  if (length(host_cols) == 0) {
+    return(tibble(
+      source_file = character(),
+      host_field = character(),
+      n_nonempty = character(),
+      example = character()
+    ))
+  }
+
+  purrr::map_dfr(
+    host_cols,
+    function(col) {
+      vals <- dat[[col]]
+      vals <- vals[!is.na(vals) & vals != ""]
+
+      tibble(
+        source_file = source_file,
+        host_field = col,
+        n_nonempty = as.character(length(vals)),
+        example = if (length(vals) > 0) vals[[1]] else NA_character_
+      )
+    }
+  )
+}
+```
+
+## Read occurrence and verbatim files
+
+This chunk reads the core Darwin Core files and saves them as CSV files in `data/raw/`.
+
+```{r read-core-files}
+occurrence <- cached_csv(
+  file.path(raw_dir, "02_occurrence_raw.csv"),
+  function() {
+    read_tsv_chr(
+      file.path(dwca_dir, "occurrence.txt"),
+      required = TRUE
+    )
+  }
+)
+
+verbatim <- cached_csv(
+  file.path(raw_dir, "03_verbatim_raw.csv"),
+  function() {
+    read_tsv_chr(
+      file.path(dwca_dir, "verbatim.txt"),
+      required = FALSE
+    )
+  }
+)
+
+core_file_counts <- tibble(
+  source_file = c("occurrence.txt", "verbatim.txt"),
+  n_rows = c(nrow(occurrence), nrow(verbatim)),
+  n_columns = c(ncol(occurrence), ncol(verbatim))
+)
+
+core_file_counts
+```
+
+## Inspect likely host-plant columns
+
+This chunk identifies columns in `occurrence.txt` and `verbatim.txt` that may contain host-plant, floral visitation, habitat, substrate, or related natural-history information.
+
+```{r inspect-host-columns}
+host_column_inventory <- cached_csv(
+  file.path(processed_dir, "04_host_column_inventory.csv"),
+  function() {
+    bind_rows(
+      make_host_column_inventory(occurrence, "occurrence.txt"),
+      make_host_column_inventory(verbatim, "verbatim.txt")
+    )
+  }
+)
+
+host_column_inventory
+```
+
+## Extract possible host-plant text from occurrence and verbatim files
+
+This chunk defines a function that pivots likely host-plant fields into long format and keeps rows where the field contains host-plant or floral-association search terms.
+
+```{r extract-core-function}
+extract_host_text <- function(dat, source_file) {
+  if (nrow(dat) == 0) {
+    return(empty_host_tbl())
+  }
+
+  host_cols <- find_host_columns(dat)
+
+  if (length(host_cols) == 0) {
+    return(empty_host_tbl())
+  }
+
+  id_cols <- intersect(
+    c(
+      "gbifID",
+      "occurrenceID",
+      "catalogNumber",
+      "recordNumber",
+      "datasetKey",
+      "scientificName",
+      "family",
+      "genus",
+      "specificEpithet",
+      "eventDate",
+      "decimalLatitude",
+      "decimalLongitude",
+      "locality",
+      "county",
+      "stateProvince",
+      "countryCode",
+      "basisOfRecord",
+      "institutionCode",
+      "collectionCode"
+    ),
+    names(dat)
+  )
+
+  dat %>%
+    mutate(source_row = as.character(row_number())) %>%
+    select(any_of(c("source_row", id_cols, host_cols))) %>%
+    pivot_longer(
+      cols = any_of(host_cols),
+      names_to = "host_field",
+      values_to = "host_text"
+    ) %>%
+    mutate(source_file = source_file, .before = source_row) %>%
+    filter(
+      !is.na(host_text),
+      host_text != "",
+      str_detect(host_text, host_text_pattern)
+    )
+}
+```
+
+## Save candidate records from occurrence.txt
+
+This chunk extracts candidate host-plant records from `occurrence.txt` and saves them in `data/processed/`.
+
+```{r extract-occurrence-host-records}
+host_from_occurrence <- cached_csv(
+  file.path(processed_dir, "05_host_from_occurrence.csv"),
+  function() {
+    extract_host_text(occurrence, "occurrence.txt")
+  }
+)
+
+host_from_occurrence
+```
+
+## Save candidate records from verbatim.txt
+
+This chunk extracts candidate host-plant records from `verbatim.txt` and saves them in `data/processed/`.
+
+```{r extract-verbatim-host-records}
+host_from_verbatim <- cached_csv(
+  file.path(processed_dir, "06_host_from_verbatim.csv"),
+  function() {
+    extract_host_text(verbatim, "verbatim.txt")
+  }
+)
+
+host_from_verbatim
+```
+
+## Search extension files
+
+Darwin Core Archives may include extension files with measurements, facts, organism interactions, or relationships among records. This chunk inventories those files and saves the inventory in `data/processed/`.
+
+```{r extension-files}
+extension_file_inventory <- cached_csv(
+  file.path(processed_dir, "07_extension_file_inventory.csv"),
+  function() {
+    all_txt <- list.files(
+      dwca_dir,
+      pattern = "\\.txt$",
+      full.names = TRUE
+    )
+
+    extension_files <- all_txt[
+      !basename(all_txt) %in% c(
+        "occurrence.txt",
+        "verbatim.txt",
+        "citations.txt",
+        "rights.txt"
+      )
+    ]
+
+    tibble(
+      source_file = basename(extension_files),
+      path = extension_files,
+      size_bytes = as.character(file.size(extension_files))
+    )
+  }
+)
+
+extension_files <- extension_file_inventory$path
+
+extension_file_inventory
+```
+
+## Extract possible host-plant text from extension files
+
+This chunk defines a function for extracting possible host-plant or floral-association information from Darwin Core Archive extension files.
+
+```{r extract-extension-function}
+extract_from_extension <- function(path) {
+  dat <- read_tsv_chr(path)
+
+  if (nrow(dat) == 0) {
+    return(empty_host_tbl())
+  }
+
+  possible_cols <- names(dat)[
+    str_detect(
+      names(dat),
+      regex(
+        paste(
+          c(
+            "measurementType",
+            "verbatimMeasurementType",
+            "measurementValue",
+            "measurementRemarks",
+            "relationship",
+            "resource",
+            "host",
+            "plant",
+            "flower",
+            "nectar",
+            "pollen",
+            "associated"
+          ),
+          collapse = "|"
+        ),
+        ignore_case = TRUE
+      )
+    )
+  ]
+
+  if (length(possible_cols) == 0) {
+    return(empty_host_tbl())
+  }
+
+  id_cols <- intersect(
+    c(
+      "gbifID",
+      "id",
+      "coreid",
+      "coreId",
+      "occurrenceID",
+      "resourceID",
+      "measurementID",
+      "relationshipOfResourceID"
+    ),
+    names(dat)
+  )
+
+  dat %>%
+    mutate(source_row = as.character(row_number())) %>%
+    select(any_of(c("source_row", id_cols, possible_cols))) %>%
+    pivot_longer(
+      cols = any_of(possible_cols),
+      names_to = "host_field",
+      values_to = "host_text"
+    ) %>%
+    mutate(source_file = basename(path), .before = source_row) %>%
+    filter(
+      !is.na(host_text),
+      host_text != "",
+      str_detect(host_text, host_text_pattern)
+    )
+}
+```
+
+```{r extract-extension-host-records}
+host_from_extensions <- cached_csv(
+  file.path(processed_dir, "08_host_from_extensions.csv"),
+  function() {
+    if (length(extension_files) == 0) {
+      return(empty_host_tbl())
+    }
+
+    purrr::map_dfr(extension_files, extract_from_extension)
+  }
+)
+
+host_from_extensions
+```
+
+## Combine candidate host-plant records
+
+This chunk combines candidate host records from occurrence, verbatim, and extension files. The combined table is saved in `data/processed/` and also written to `outputs/` as the main final CSV.
+
+```{r combine-host-records}
+host_records_all <- bind_rows(
+  host_from_occurrence,
+  host_from_verbatim,
+  host_from_extensions
+) %>%
+  distinct() %>%
+  arrange(source_file, source_row, host_field)
+
+write_checkpoint(
+  host_records_all,
+  file.path(processed_dir, "09_candidate_host_records_all.csv")
+)
+
+readr::write_csv(
+  host_records_all,
+  final_output_csv,
+  na = ""
+)
+
+host_records_all
+```
+
+## Summarize extracted records
+
+This chunk summarizes the number of candidate host-plant records by source file and host-text field.
+
+```{r summarize-host-records}
+host_record_summary <- host_records_all %>%
+  count(source_file, host_field, sort = TRUE)
+
+write_checkpoint(
+  host_record_summary,
+  file.path(processed_dir, "10_candidate_host_record_summary.csv")
+)
+
+host_record_summary
+```
+
+## Output files
+
+This chunk prints the main output locations so they are visible in the rendered HTML file.
+
+```{r output-files}
+tibble(
+  output_type = c(
+    "Project root",
+    "Raw data directory",
+    "Processed data directory",
+    "GBIF zip directory",
+    "Unzipped Darwin Core Archive directory",
+    "Outputs directory",
+    "Final candidate host-record CSV"
+  ),
+  path = c(
+    project_root,
+    raw_dir,
+    processed_dir,
+    gbif_download_dir,
+    dwca_dir,
+    outputs_dir,
+    final_output_csv
+  )
+)
+```
+
+## Notes for downstream cleaning
+
+The resulting CSV should be reviewed before analysis. In particular:
+
+- Some records may describe adult floral visitation rather than larval host use.
+- Some plant names may be informal, misspelled, abbreviated, or embedded in longer notes.
+- Some records may mention habitat or substrate rather than an actual plant association.
+- Duplicate host information may appear in both interpreted and verbatim files.
+- Records lacking host-plant information are expected and are not errors.
+- The text search used here is intentionally broad, so false positives should be expected.

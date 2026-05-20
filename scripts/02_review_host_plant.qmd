@@ -1,0 +1,780 @@
+---
+title: "Review California Bombus Candidate Host Records"
+author: "Gretchen"
+format: html
+execute:
+  echo: true
+  warning: false
+  message: true
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## Overview
+
+This script reviews candidate host-plant records extracted from GBIF
+California *Bombus* occurrence records.
+
+The previous script used a broad text search to find possible host,
+plant, floral, pollen, nectar, or related associations. Those records
+are candidates only. They need manual review before they are treated as
+confirmed bee-plant associations.
+
+This script does four main things:
+
+1.  Reads the candidate host-record file.
+2.  Creates or updates a manual review CSV.
+3.  Reads the reviewed CSV and keeps confirmed records.
+4.  Summarizes confirmed records by bee species, host plant type, and
+    county.
+
+## Review workflow
+
+This script is designed to be run more than once.
+
+First, run the script to create the manual review file:
+
+`outputs/gbif_bombus_california_host_review.csv`
+
+Then open that CSV in a spreadsheet editor and review the candidate
+records by hand. Each row is one candidate bee-plant association.
+
+After editing and saving the review CSV, rerun this script. The script
+will preserve the manual review columns and create confirmed-record
+tables and summary tables.
+
+The basic review sequence is:
+
+1.  Run this script once.
+2.  Open `outputs/gbif_bombus_california_host_review.csv`.
+3.  Inspect the candidate evidence in `host_text`.
+4.  Mark each row as confirmed, rejected, uncertain, or still needing
+    review.
+5.  Clean the plant name or host category for confirmed rows.
+6.  Save the review CSV with the same filename.
+7.  Rerun this script to create summaries.
+
+The summary tables use the `host_plant_type` column. That column should
+contain the plant grouping you want to count by. It may be a plant
+species, genus, family, or broader category, depending on the quality of
+the evidence.
+
+## Setup
+
+```{r setup}
+library(dplyr)
+library(readr)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(purrr)
+
+# Vectorized helper for testing whether character values contain text.
+# This works inside mutate(), filter(), and case_when().
+has_text <- function(x) {
+  !is.na(x) & nzchar(x)
+}
+
+# Add missing columns to a data frame.
+#
+# GBIF-derived files may differ in which fields are present. This helper
+# keeps the script from failing when an expected column is absent.
+add_missing_cols <- function(dat, cols) {
+  missing_cols <- setdiff(cols, names(dat))
+
+  for (col in missing_cols) {
+    dat[[col]] <- NA_character_
+  }
+
+  dat
+}
+
+# Find the project root by walking upward from the current Quarto file.
+#
+# The project root is identified by the presence of scripts/, data/,
+# and outputs/.
+find_project_root <- function() {
+  input_file <- tryCatch(knitr::current_input(), error = function(e) NULL)
+
+  if (length(input_file) == 1 &&
+      !is.na(input_file) &&
+      nzchar(input_file) &&
+      file.exists(input_file)) {
+    start_dir <- dirname(normalizePath(
+      input_file,
+      winslash = "/",
+      mustWork = TRUE
+    ))
+  } else {
+    start_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  }
+
+  current_dir <- start_dir
+
+  for (i in seq_len(10)) {
+    has_project_dirs <- all(dir.exists(file.path(
+      current_dir,
+      c("scripts", "data", "outputs")
+    )))
+
+    if (has_project_dirs) {
+      return(current_dir)
+    }
+
+    parent_dir <- dirname(current_dir)
+
+    if (identical(parent_dir, current_dir)) {
+      break
+    }
+
+    current_dir <- parent_dir
+  }
+
+  stop(
+    "Could not find project root. Expected scripts/, data/, and outputs/."
+  )
+}
+
+project_root <- find_project_root()
+
+# Small wrapper to build paths relative to the project root.
+path_from_root <- function(...) {
+  file.path(project_root, ...)
+}
+
+outputs_dir <- path_from_root("outputs")
+
+# Put summary tables in their own output subfolder.
+summary_dir <- path_from_root("outputs", "host_review_tables")
+
+dir.create(outputs_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(summary_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Input from the previous GBIF host-record extraction script.
+candidate_csv <- path_from_root(
+  "outputs",
+  "gbif_bombus_california_candidate_host_records.csv"
+)
+
+# This is the file you edit by hand.
+review_csv <- path_from_root(
+  "outputs",
+  "gbif_bombus_california_host_review.csv"
+)
+
+# These files are derived from the reviewed file.
+confirmed_csv <- path_from_root(
+  "outputs",
+  "gbif_bombus_california_confirmed_host_records.csv"
+)
+
+review_issues_csv <- path_from_root(
+  "outputs",
+  "gbif_bombus_california_host_review_issues.csv"
+)
+
+summary_long_csv <- file.path(
+  summary_dir,
+  "summary_species_host_type_county_long.csv"
+)
+
+summary_county_wide_csv <- file.path(
+  summary_dir,
+  "summary_species_host_type_by_county_wide.csv"
+)
+
+summary_host_wide_csv <- file.path(
+  summary_dir,
+  "summary_species_county_by_host_type_wide.csv"
+)
+
+message("Project root: ", project_root)
+message("Candidate records: ", candidate_csv)
+message("Review file: ", review_csv)
+```
+
+## Read candidate host records
+
+```{r read-candidate-records}
+if (!file.exists(candidate_csv)) {
+  stop("Candidate host-record file not found: ", candidate_csv)
+}
+
+candidate_records <- readr::read_csv(
+  candidate_csv,
+  col_types = readr::cols(.default = readr::col_character()),
+  show_col_types = FALSE
+)
+
+# These columns are expected from the previous workflow, but some may be
+# absent if the source file had limited information.
+candidate_records <- add_missing_cols(
+  candidate_records,
+  c(
+    "scientificName",
+    "family",
+    "genus",
+    "specificEpithet",
+    "eventDate",
+    "county",
+    "locality",
+    "decimalLatitude",
+    "decimalLongitude",
+    "source_file",
+    "source_row",
+    "host_field",
+    "host_text"
+  )
+)
+
+# Create convenient review fields.
+#
+# bee_species is built in order of preference:
+# 1. scientificName, if available
+# 2. genus + specificEpithet, if available
+# 3. genus alone
+# 4. missing
+candidate_records <- candidate_records %>%
+  mutate(
+    bee_species = case_when(
+      has_text(scientificName) ~ scientificName,
+      has_text(genus) & has_text(specificEpithet) ~
+        paste(genus, specificEpithet),
+      has_text(genus) ~ genus,
+      TRUE ~ NA_character_
+    ),
+    county = if_else(has_text(county), county, NA_character_)
+  )
+
+# Quick diagnostic: where did the candidate text come from?
+candidate_records %>%
+  count(source_file, host_field, sort = TRUE)
+```
+
+## Create or update review file
+
+```{r create-review-file}
+# These are the columns intended for manual review.
+#
+# Do not remove these from the CSV if you edit it by hand. The script
+# expects to find them on later runs.
+review_columns <- c(
+  "review_status",
+  "confirmed_host",
+  "host_plant_name",
+  "host_plant_type",
+  "plant_family",
+  "plant_genus",
+  "plant_species",
+  "association_type",
+  "reviewer_notes"
+)
+
+# These columns identify a candidate record.
+#
+# They are used to join previous manual review decisions back onto the
+# current candidate table. This lets the candidate file be regenerated
+# without losing previous review work.
+review_keys <- c(
+  "source_file",
+  "source_row",
+  "host_field",
+  "host_text"
+)
+
+front_review_columns <- c(
+  "review_id",
+  "host_field",
+  "host_text",
+  review_columns
+)
+
+review_template <- candidate_records %>%
+  mutate(
+    review_id = as.character(row_number()),
+    review_status = "needs_review",
+    confirmed_host = "",
+    host_plant_name = "",
+    host_plant_type = "",
+    plant_family = "",
+    plant_genus = "",
+    plant_species = "",
+    association_type = "",
+    reviewer_notes = ""
+  ) %>%
+  relocate(
+    any_of(front_review_columns),
+    .before = source_file
+  )
+
+# If a review file already exists, preserve the manual review fields.
+#
+# This is the key protection against accidentally overwriting review
+# decisions during reruns.
+if (file.exists(review_csv)) {
+  existing_review <- readr::read_csv(
+    review_csv,
+    col_types = readr::cols(.default = readr::col_character()),
+    show_col_types = FALSE
+  )
+
+  existing_review <- add_missing_cols(existing_review, review_columns)
+  existing_review <- add_missing_cols(existing_review, review_keys)
+
+  existing_review_manual <- existing_review %>%
+    select(any_of(c(review_keys, review_columns))) %>%
+    distinct(across(any_of(review_keys)), .keep_all = TRUE)
+
+  review_template <- review_template %>%
+    select(-any_of(review_columns)) %>%
+    left_join(existing_review_manual, by = review_keys) %>%
+    mutate(
+      review_status = if_else(
+        has_text(review_status),
+        review_status,
+        "needs_review"
+      ),
+      across(
+        any_of(setdiff(review_columns, "review_status")),
+        ~ if_else(has_text(.x), .x, "")
+      )
+    ) %>%
+   relocate(any_of(front_review_columns), .before = source_file)
+}
+
+readr::write_csv(review_template, review_csv, na = "")
+
+message("Review file written to: ", review_csv)
+
+# This lets you see how much review has been completed.
+review_template %>%
+  count(review_status, confirmed_host, sort = TRUE)
+```
+
+## Review instructions
+
+Edit this file by hand:
+
+`outputs/gbif_bombus_california_host_review.csv`
+
+The most important evidence column is `host_text`. That is the text that
+triggered the candidate host-plant search.
+
+Useful columns to inspect during review are:
+
+```{r review-evidence-columns}
+review_evidence_columns <- tibble::tribble(
+  ~column, ~what_to_check,
+
+  "bee_species",
+  "Bumble bee taxon associated with the candidate record.",
+
+  "county",
+  "County where the specimen or observation was recorded.",
+
+  "source_file",
+  "Whether the text came from occurrence, verbatim, or extension data.",
+
+  "host_field",
+  "The GBIF or Darwin Core field where candidate text was found.",
+
+  "host_text",
+  "The original candidate text. This is usually the key review field."
+)
+
+knitr::kable(review_evidence_columns)
+```
+
+Use `confirmed` and `yes` only when the text gives a usable bee-plant
+association.
+
+Use `reject` and `no` when the text is not a usable host or floral
+record.
+
+Use `uncertain` when the text suggests a possible association but is
+ambiguous.
+
+```{r review-decision-guide}
+review_decision_guide <- tibble::tribble(
+  ~column, ~suggested_values, ~meaning,
+
+  "review_status",
+  "needs_review; confirmed; reject; uncertain",
+  "Overall review decision for the candidate record.",
+
+  "confirmed_host",
+  "yes; no; uncertain",
+  "Whether the text is a usable bee-plant association.",
+
+  "host_plant_name",
+  "free text",
+  "Cleaned plant name as you want it reported.",
+
+  "host_plant_type",
+  "free text",
+  "Plant grouping used in summary tables.",
+
+  "plant_family",
+  "free text",
+  "Plant family, if known.",
+
+  "plant_genus",
+  "free text",
+  "Plant genus, if known.",
+
+  "plant_species",
+  "free text",
+  "Plant species, if known.",
+
+  "association_type",
+  "floral_visit; pollen; nectar; collected_on; habitat; other",
+  "Kind of bee-plant association inferred from the text.",
+
+  "reviewer_notes",
+  "free text",
+  "Notes about uncertainty, interpretation, or cleanup."
+)
+
+knitr::kable(review_decision_guide)
+```
+
+Minimum entries for a confirmed row:
+
+```{r confirmed-row-guide}
+confirmed_row_guide <- tibble::tribble(
+  ~column, ~value,
+
+  "review_status",
+  "confirmed",
+
+  "confirmed_host",
+  "yes",
+
+  "host_plant_type",
+  "Plant category to use in summaries.",
+
+  "host_plant_name",
+  "Cleaned plant name, if available."
+)
+
+knitr::kable(confirmed_row_guide)
+```
+
+Minimum entries for a rejected row:
+
+```{r rejected-row-guide}
+rejected_row_guide <- tibble::tribble(
+  ~column, ~value,
+
+  "review_status",
+  "reject",
+
+  "confirmed_host",
+  "no"
+)
+
+knitr::kable(rejected_row_guide)
+```
+
+## After manual review
+
+After editing the review CSV, save it with the same filename:
+
+`outputs/gbif_bombus_california_host_review.csv`
+
+Then rerun this script.
+
+The chunks below use only rows marked as confirmed. A row is treated as
+confirmed when it has a positive review decision and no negative review
+decision.
+
+Positive review values are:
+
+- `confirmed_host` is `yes`, `y`, or `true`
+- `review_status` is `confirmed`, `accept`, or `accepted`
+
+Negative review values are:
+
+- `confirmed_host` is `no`, `n`, or `false`
+- `review_status` is `reject` or `rejected`
+
+If a row has both positive and negative values, it is flagged as a
+review conflict and is not used in the final summaries.
+
+## Read reviewed records
+
+```{r read-reviewed-records}
+reviewed_records <- readr::read_csv(
+  review_csv,
+  col_types = readr::cols(.default = readr::col_character()),
+  show_col_types = FALSE
+)
+
+reviewed_records <- add_missing_cols(reviewed_records, review_columns)
+
+reviewed_records <- add_missing_cols(
+  reviewed_records,
+  c(
+    "bee_species",
+    "scientificName",
+    "genus",
+    "specificEpithet",
+    "county",
+    "source_file",
+    "source_row",
+    "host_field",
+    "host_text"
+  )
+)
+
+# Normalize review fields.
+#
+# str_squish() trims leading/trailing whitespace and collapses repeated
+# internal spaces. This helps avoid accidental categories like
+# "confirmed " and "confirmed" being treated as different values.
+reviewed_records <- reviewed_records %>%
+  mutate(
+    review_status = str_to_lower(str_squish(review_status)),
+    confirmed_host = str_to_lower(str_squish(confirmed_host)),
+    host_plant_name = str_squish(host_plant_name),
+    host_plant_type = str_squish(host_plant_type),
+    plant_family = str_squish(plant_family),
+    plant_genus = str_squish(plant_genus),
+    plant_species = str_squish(plant_species),
+    association_type = str_squish(association_type),
+    reviewer_notes = str_squish(reviewer_notes),
+    positive_review = confirmed_host %in% c("yes", "y", "true") |
+      review_status %in% c("confirmed", "accept", "accepted"),
+    negative_review = confirmed_host %in% c("no", "n", "false") |
+      review_status %in% c("reject", "rejected"),
+    review_conflict = positive_review & negative_review,
+    is_confirmed_host = positive_review & !negative_review
+  )
+
+reviewed_records %>%
+  count(
+    review_status,
+    confirmed_host,
+    is_confirmed_host,
+    review_conflict,
+    sort = TRUE
+  )
+```
+
+## Review issues
+
+```{r review-issues}
+review_issues <- reviewed_records %>%
+  filter(
+    review_conflict |
+      (is_confirmed_host & !has_text(host_plant_type) &
+         !has_text(host_plant_name) & !has_text(plant_species) &
+         !has_text(plant_genus) & !has_text(plant_family))
+  )
+
+readr::write_csv(review_issues, review_issues_csv, na = "")
+
+message("Review issues written to: ", review_issues_csv)
+
+review_issues %>%
+  select(
+    review_id,
+    review_status,
+    confirmed_host,
+    bee_species,
+    county,
+    host_plant_type,
+    host_plant_name,
+    host_text,
+    reviewer_notes
+  ) %>%
+  head(25)
+```
+
+## Confirmed host records
+
+```{r confirmed-host-records}
+confirmed_host_records <- reviewed_records %>%
+  filter(is_confirmed_host, !review_conflict) %>%
+  mutate(
+    # Rebuild bee_species if it was missing from the review file.
+    bee_species = case_when(
+      has_text(bee_species) ~ bee_species,
+      has_text(scientificName) ~ scientificName,
+      has_text(genus) & has_text(specificEpithet) ~
+        paste(genus, specificEpithet),
+      has_text(genus) ~ genus,
+      TRUE ~ "unknown bee"
+    ),
+
+    county = if_else(has_text(county), county, "unknown county"),
+
+    # host_plant_type is the grouping used in the summary tables.
+    #
+    # This lets you summarize at whatever level is appropriate:
+    # species, genus, family, or a broader plant category.
+    host_plant_type = case_when(
+      has_text(host_plant_type) ~ host_plant_type,
+      has_text(host_plant_name) ~ host_plant_name,
+      has_text(plant_species) ~ plant_species,
+      has_text(plant_genus) ~ plant_genus,
+      has_text(plant_family) ~ plant_family,
+      TRUE ~ "unassigned host"
+    )
+  )
+
+readr::write_csv(confirmed_host_records, confirmed_csv, na = "")
+
+message("Confirmed host records written to: ", confirmed_csv)
+
+confirmed_host_records %>%
+  select(
+    bee_species,
+    county,
+    host_plant_type,
+    host_plant_name,
+    association_type,
+    source_file,
+    host_field,
+    host_text
+  ) %>%
+  head(25)
+```
+
+## Summary-table logic
+
+The summary tables count confirmed records by:
+
+- bumble bee species
+- host plant type
+- county
+
+The `host_plant_type` field controls the plant grouping used in these
+tables. If `host_plant_type` is blank, the script falls back to
+`host_plant_name`, then `plant_species`, then `plant_genus`, then
+`plant_family`.
+
+This allows summaries at different taxonomic levels, depending on how
+precise the original text is.
+
+## Summary: species by host plant type by county
+
+```{r summary-species-host-county-long}
+# Long format is usually the safest analysis format.
+# Each row is one bee species x host type x county combination.
+summary_species_host_county <- confirmed_host_records %>%
+  count(
+    bee_species,
+    host_plant_type,
+    county,
+    name = "n_records"
+  ) %>%
+  arrange(
+    bee_species,
+    host_plant_type,
+    county
+  )
+
+readr::write_csv(summary_species_host_county, summary_long_csv, na = "")
+
+message("Long summary written to: ", summary_long_csv)
+
+knitr::kable(
+  summary_species_host_county,
+  caption = "Confirmed host records by bee species, host plant type, and county."
+)
+```
+
+## Wide table: counties as columns
+
+```{r summary-counties-wide}
+# This format is useful for quick inspection.
+#
+# Rows are bee species x host plant type.
+# Columns are counties.
+summary_species_host_by_county_wide <- summary_species_host_county %>%
+  tidyr::pivot_wider(
+    names_from = county,
+    values_from = n_records,
+    values_fill = 0
+  ) %>%
+  arrange(bee_species, host_plant_type)
+
+readr::write_csv(
+  summary_species_host_by_county_wide,
+  summary_county_wide_csv,
+  na = ""
+)
+
+message("County-wide summary written to: ", summary_county_wide_csv)
+
+knitr::kable(
+  summary_species_host_by_county_wide,
+  caption = paste(
+    "Confirmed host records by bee species and host plant type,",
+    "with counties as columns."
+  )
+)
+```
+
+## Wide table: host plant types as columns
+
+```{r summary-host-types-wide}
+# This format is useful if you want to compare host categories within
+# each bee species and county.
+#
+# Rows are bee species x county.
+# Columns are host plant types.
+summary_species_county_by_host_wide <- summary_species_host_county %>%
+  tidyr::pivot_wider(
+    names_from = host_plant_type,
+    values_from = n_records,
+    values_fill = 0
+  ) %>%
+  arrange(bee_species, county)
+
+readr::write_csv(
+  summary_species_county_by_host_wide,
+  summary_host_wide_csv,
+  na = ""
+)
+
+message("Host-type-wide summary written to: ", summary_host_wide_csv)
+
+knitr::kable(
+  summary_species_county_by_host_wide,
+  caption = paste(
+    "Confirmed host records by bee species and county,",
+    "with host plant types as columns."
+  )
+)
+```
+
+## Output files
+
+```{r output-files}
+output_files <- tibble::tribble(
+  ~file, ~description,
+
+  review_csv,
+  "Manual review file. Edit this to confirm or reject records.",
+
+  confirmed_csv,
+  "Confirmed host records after manual review.",
+
+  review_issues_csv,
+  "Rows with review conflicts or missing host categories.",
+
+  summary_long_csv,
+  "Long-format counts by bee species, host plant type, and county.",
+
+  summary_county_wide_csv,
+  "Wide-format counts with counties as columns.",
+
+  summary_host_wide_csv,
+  "Wide-format counts with host plant types as columns."
+)
+
+knitr::kable(output_files)
+```

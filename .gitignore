@@ -5,6 +5,23 @@
 .positai
 
 # Large GBIF Darwin Core Archive files; keep local, do not commit
-scripts/gbif_bombus_california_dwca/occurrence.txt
-scripts/gbif_bombus_california_dwca/verbatim.txt
-scripts/gbif_bombus_california_dwca/*.zip
+data/gbif_bombus_california_dwca/occurrence.txt
+data/gbif_bombus_california_dwca/verbatim.txt
+data/gbif_bombus_california_dwca/*.zip
+
+#data
+data/raw
+data/processed
+
+# Large downloaded/raw GBIF data
+data/gbif_bombus_california_dwca/
+data/raw/02_occurrence_raw.csv
+data/raw/03_verbatim_raw.csv
+.DS_Store
+
+# Generated/downloaded GBIF archive files
+data/gbif_downloads/*.zip
+data/gbif_bombus_california_dwca/**/*.xml
+data/gbif_bombus_california_dwca/*.xml
+scripts/gbif_bombus_california_dwca/**/*.xml
+scripts/gbif_bombus_california_dwca/*.xml
